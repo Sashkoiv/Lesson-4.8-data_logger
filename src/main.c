@@ -16,28 +16,55 @@
 #define I2C_PORT        I2C_NUM_0
 #define I2C_SCL         4
 #define I2C_SDA         5
-//i2c object
+// i2c object
 static i2c_master_bus_handle_t i2c_handle = NULL;
 
 #define OLED_SIZE I2C_SSD1306_128x32_CONFIG_DEFAULT
 #define OLED_CONTRAST   255
-//i2c object
+// i2c object
 ssd1306_handle_t dev_hdl = NULL;
+
+#define PIN_NUM_MOSI    11
+#define PIN_NUM_MISO    13
+#define PIN_NUM_CLK     12
+#define PIN_NUM_CS      10
+// spi object
+static spi_device_handle_t bme280_spi;
 
 #define TAG "DataLogger"
 
 static void i2c_init(){
     const i2c_master_bus_config_t bus_cfg = {
-            .i2c_port = I2C_PORT,
-            .sda_io_num = I2C_SDA,
-            .scl_io_num = I2C_SCL,
-            .clk_source = I2C_CLK_SRC_DEFAULT,
-            .glitch_ignore_cnt = 7,
-            .intr_priority = 0,
-            .trans_queue_depth = 0,
-            .flags.enable_internal_pullup = false,
-        };
+        .i2c_port = I2C_PORT,
+        .sda_io_num = I2C_SDA,
+        .scl_io_num = I2C_SCL,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .intr_priority = 0,
+        .trans_queue_depth = 0,
+        .flags.enable_internal_pullup = false,
+    };
     ESP_ERROR_CHECK(i2c_new_master_bus(&bus_cfg, &i2c_handle));
+}
+
+static void spi_init(){
+    spi_bus_config_t buscfg = {
+        .mosi_io_num = PIN_NUM_MOSI,
+        .miso_io_num = PIN_NUM_MISO,
+        .sclk_io_num = PIN_NUM_CLK,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 32
+    };
+    ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO));
+
+    spi_device_interface_config_t devcfg = {
+        .clock_speed_hz = 10 * 1000 * 1000,
+        .mode = 0,
+        .spics_io_num = PIN_NUM_CS,
+        .queue_size = 1,
+    };
+    ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &devcfg, &bme280_spi));
 }
 
 static void oled_init(){
