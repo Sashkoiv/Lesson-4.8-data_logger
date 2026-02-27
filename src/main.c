@@ -1,3 +1,4 @@
+#include <assert.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -18,6 +19,11 @@
 //i2c object
 static i2c_master_bus_handle_t i2c_handle = NULL;
 
+#define OLED_SIZE I2C_SSD1306_128x32_CONFIG_DEFAULT
+#define OLED_CONTRAST   255
+//i2c object
+ssd1306_handle_t dev_hdl = NULL;
+
 #define TAG "DataLogger"
 
 static void i2c_init(){
@@ -34,13 +40,25 @@ static void i2c_init(){
     ESP_ERROR_CHECK(i2c_new_master_bus(&bus_cfg, &i2c_handle));
 }
 
+static void oled_init(){
+    ssd1306_config_t dev_cfg = OLED_SIZE;
 
+    ESP_ERROR_CHECK(ssd1306_init(i2c_handle, &dev_cfg, &dev_hdl));
+
+    if (dev_hdl == NULL) {
+        ESP_LOGI(TAG, "ssd1306 init failed");
+        assert(dev_hdl);
+    }
+
+    ssd1306_clear_display(dev_hdl, false);
+    ESP_ERROR_CHECK(ssd1306_set_contrast(dev_hdl, OLED_CONTRAST));
+}
 
 
 /*
 Code Plan
 + Initialize I2C (OLED, RTC, EEPROM, SENSOR)
-* Initialize OLED SSD1306 and display test image/string/etc
++ Initialize OLED SSD1306 and display test image/string/etc
 * Initialize BME280 and get id - display on OLED
 * Request datetime from RTC - display on OLED
 * Retrieve data function for BME280
@@ -75,6 +93,16 @@ Code Plan
 
 
 
-void app_main(void)
-{
+void app_main(void){
+    i2c_init();
+    oled_init();
+
+    //Test string on display
+    ssd1306_display_textbox_ticker(dev_hdl, 0, 0, "putin - XY..0!", 15, false, 0);
+
+    while(1){
+        vTaskDelay(1000);
+    }
+
+
 }
