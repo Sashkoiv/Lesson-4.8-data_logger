@@ -7,6 +7,7 @@
 #include "driver/i2c_master.h"
 #include "ssd1306.h"
 #include "at24c.h"
+#include "ds1307.h"
 
 #define EEPROM_I2C_ADDR   (0x50 << 1)   // 24C32 base address
 #define EEPROM_SIZE       4096          // bytes
@@ -23,6 +24,10 @@ static i2c_master_bus_handle_t i2c_handle = NULL;
 #define OLED_CONTRAST   255
 // i2c object
 ssd1306_handle_t dev_hdl = NULL;
+
+#define RTC_I2C_ADDR     0x68
+// RTC struct
+static i2c_master_dev_handle_t rtc_dev = NULL;
 
 #define PIN_NUM_MOSI    11
 #define PIN_NUM_MISO    13
@@ -203,12 +208,56 @@ static void bme280_get_data(float *temp, float *hum, float *press){
     *hum = compensate_humidity(adc_H);
 }
 
+static void ds1307_init(i2c_master_bus_handle_t bus_handle,
+                  uint16_t dev_addr,
+                  i2c_master_dev_handle_t *dev_handle) {
+    const i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = dev_addr,
+        .scl_speed_hz = 100000,
+    };
+    ESP_ERROR_CHECK(i2c_master_bus_add_device(bus_handle, &dev_cfg, dev_handle));
+}
+
+uint8_t BCD2DEC(uint8_t bcd) {
+  return ((bcd >> 4) * 10) + (bcd & 0x0F);
+}
+
+uint8_t DEC2BCD(uint8_t dec) {
+  return ((dec / 10) << 4) | (dec % 10);
+}
+
+esp_err_t ds1307_get_unix_time(i2c_master_dev_handle_t dev_handle, time_t *out_unix) {
+    uint8_t data[7];
+    uint8_t reg = 0x00; // Start at register 0 (seconds)
+
+    // Read 7 bytes starting from register 0x00
+    esp_err_t ret = i2c_master_transmit_receive(dev_handle, &reg, 1, data, 7, -1);
+    if (ret != ESP_OK) return ret;
+
+    struct tm t;
+    // DS1307 mask: bit 7 of seconds is "Clock Halt", we mask it out
+    t.tm_sec  = BCD2DEC(data[0] & 0x7F);
+    t.tm_min  = BCD2DEC(data[1]);
+    // Mask bit 6 (12/24h mode) and bit 5 (AM/PM) for 24h mode
+    t.tm_hour = BCD2DEC(data[2] & 0x3F);
+    t.tm_mday = BCD2DEC(data[4]);
+    // tm_mon is 0-11 in C, but 1-12 in DS1307
+    t.tm_mon  = BCD2DEC(data[5]) - 1;
+    // tm_year is years since 1900. DS1307 stores 00-99 (2000-2099)
+    t.tm_year = BCD2DEC(data[6]) + 100;
+    t.tm_isdst = -1; // Not handled by RTC hardware
+
+    *out_unix = mktime(&t);
+    return ESP_OK;
+}
+
 /*
 Code Plan
 + Initialize I2C (OLED, RTC, EEPROM, SENSOR)
 + Initialize OLED SSD1306 and display test image/string/etc
 + Initialize BME280 and get id - display on UART
-* Request datetime from RTC - display on OLED
++ Request datetime from RTC - display on OLED
 * Retrieve data function for BME280
 * Retrieve data function for DS1307
 * Function to update data on OLED
@@ -243,6 +292,10 @@ void app_main(void){
 
     spi_init();
     bme280_init();
+
+    ds1307_init(i2c_handle, RTC_I2C_ADDR, &rtc_dev);
+    time_t now;
+
     //Test string on display
     ssd1306_display_textbox_ticker(dev_hdl, 0, 0, "putin - XY..0!", 15, false, 0);
 
@@ -253,7 +306,29 @@ void app_main(void){
     while(1){
         bme280_get_data(&temp, &hum, &press);
         ESP_LOGI(TAG, "T=%.2f °C  P=%.2f hPa  H=%.2f %%", temp, press, hum);
-        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        if (ds1307_get_unix_time(rtc_dev, &now) == ESP_OK) {
+            ESP_LOGI(TAG, "Unix Timestamp: %ld", (long)now);
+
+            // Convert Unix back to readable string for OLED later
+            struct tm *time_info = localtime(&now);
+            char str[32];
+            char str_time[16];
+            char str_date[16];
+            char str_telemetry[16];
+            strftime(str_time, sizeof(str_time), "%H:%M:%S", time_info);
+            strftime(str_date, sizeof(str_time), "   %Y-%m-%d", time_info);
+
+            strftime(str, sizeof(str), "%Y-%m-%d %H:%M:%S", time_info);
+            snprintf(str_telemetry, sizeof(str_telemetry), "T%.1f P%.0f H%.0f%%", temp, ((press * 75006.f) / 100000), hum);
+
+            ESP_LOGI(TAG, "Formatted: %s", str);
+            ssd1306_display_text_x2(dev_hdl, 0, str_time, false);
+            ssd1306_display_text(dev_hdl, 2, str_date, false);
+            ssd1306_display_text(dev_hdl, 3, str_telemetry, false);
+
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
 
     }
 
