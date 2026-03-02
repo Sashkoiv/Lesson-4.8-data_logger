@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -7,7 +8,6 @@
 #include "driver/i2c_master.h"
 #include "ssd1306.h"
 #include "at24c.h"
-#include "ds1307.h"
 
 #define EEPROM_I2C_ADDR   (0x50 << 1)   // 24C32 base address
 #define EEPROM_SIZE       4096          // bytes
@@ -252,15 +252,29 @@ esp_err_t ds1307_get_unix_time(i2c_master_dev_handle_t dev_handle, time_t *out_u
     return ESP_OK;
 }
 
+static void oled_update(struct tm *time_info, float temp, float press, float hum){
+    char str_time[16];
+    char str_date[16];
+    char str_telemetry[16];
+
+    strftime(str_time, sizeof(str_time), "%H:%M:%S", time_info);
+    strftime(str_date, sizeof(str_time), "   %Y-%m-%d", time_info);
+    snprintf(str_telemetry, sizeof(str_telemetry), "T%.1f P%.0f H%.0f%%", temp, ((press * 75006.f) / 100000), hum);
+
+    ssd1306_display_text_x2(dev_hdl, 0, str_time, false);
+    ssd1306_display_text(dev_hdl, 2, str_date, false);
+    ssd1306_display_text(dev_hdl, 3, str_telemetry, false);
+}
+
 /*
 Code Plan
 + Initialize I2C (OLED, RTC, EEPROM, SENSOR)
 + Initialize OLED SSD1306 and display test image/string/etc
 + Initialize BME280 and get id - display on UART
 + Request datetime from RTC - display on OLED
-* Retrieve data function for BME280
-* Retrieve data function for DS1307
-* Function to update data on OLED
+- Retrieve data function for BME280
+- Retrieve data function for DS1307
++ Function to update data on OLED
     * Date and time
     * Temp, Hum, Pres
 * Cycle business logic in superloop
@@ -294,7 +308,7 @@ void app_main(void){
     bme280_init();
 
     ds1307_init(i2c_handle, RTC_I2C_ADDR, &rtc_dev);
-    time_t now;
+    time_t now = 0;
 
     //Test string on display
     ssd1306_display_textbox_ticker(dev_hdl, 0, 0, "putin - XY..0!", 15, false, 0);
@@ -303,31 +317,21 @@ void app_main(void){
     float press = 0.0f;
     float hum = 0.0f;
 
+    struct tm *time_info = NULL;
+
     while(1){
         bme280_get_data(&temp, &hum, &press);
         ESP_LOGI(TAG, "T=%.2f °C  P=%.2f hPa  H=%.2f %%", temp, press, hum);
 
         if (ds1307_get_unix_time(rtc_dev, &now) == ESP_OK) {
-            ESP_LOGI(TAG, "Unix Timestamp: %ld", (long)now);
-
-            // Convert Unix back to readable string for OLED later
-            struct tm *time_info = localtime(&now);
+            time_info = localtime(&now);
             char str[32];
-            char str_time[16];
-            char str_date[16];
-            char str_telemetry[16];
-            strftime(str_time, sizeof(str_time), "%H:%M:%S", time_info);
-            strftime(str_date, sizeof(str_time), "   %Y-%m-%d", time_info);
-
             strftime(str, sizeof(str), "%Y-%m-%d %H:%M:%S", time_info);
-            snprintf(str_telemetry, sizeof(str_telemetry), "T%.1f P%.0f H%.0f%%", temp, ((press * 75006.f) / 100000), hum);
-
+            ESP_LOGI(TAG, "Unix Timestamp: %ld", (long)now);
             ESP_LOGI(TAG, "Formatted: %s", str);
-            ssd1306_display_text_x2(dev_hdl, 0, str_time, false);
-            ssd1306_display_text(dev_hdl, 2, str_date, false);
-            ssd1306_display_text(dev_hdl, 3, str_telemetry, false);
-
         }
+
+        oled_update(time_info, temp, press, hum);
         vTaskDelay(pdMS_TO_TICKS(100));
 
     }
